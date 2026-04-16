@@ -1,15 +1,4 @@
-const express = require('express');
-const http = require('http');
 const { v4: uuidv4 } = require('uuid');
-const socketIo = require('socket.io');
-
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
-
-const PORT = process.env.PORT || 3000;
-
-app.use(express.static('public'));
 
 const GAME_WIDTH = 3000;
 const GAME_HEIGHT = 2000;
@@ -25,26 +14,15 @@ function randomColor() {
   return `hsl(${Math.floor(Math.random()*360)}, 70%, 60%)`;
 }
 
-let players = {};
-let pellets = [];
 function createPellet() {
   const pos = randomPos();
   return {
     id: uuidv4(),
     x: pos.x,
     y: pos.y,
-    mass: 3 + Math.random()*3,
+    mass: 3 + Math.random() * 3,
     color: "#E6C23A"
   };
-}
-function initPellets() {
-  pellets = [];
-  for(let i=0; i<PELLET_COUNT; i++) pellets.push(createPellet());
-}
-initPellets();
-
-function getDistance(x1,y1,x2,y2) {
-  return Math.sqrt((x1-x2)**2 + (y1-y2)**2);
 }
 
 function createPlayer(id) {
@@ -52,7 +30,6 @@ function createPlayer(id) {
   return {
     id,
     color: randomColor(),
-    score: 0,
     cells: [
       {
         id: uuidv4(),
@@ -61,51 +38,35 @@ function createPlayer(id) {
         vx: 0,
         vy: 0,
         mass: 30,
-        boost: false,
         splitTimeout: 0
       }
     ],
     input: {
-      mouseX: GAME_WIDTH/2,
-      mouseY: GAME_HEIGHT/2,
+      mouseX: pos.x,
+      mouseY: pos.y,
       mouseDown: false,
       space: false,
       w: false
     }
-  }
+  };
 }
 
-function shootPellet(cell, dir, power = 7, loss = 7) {
-  if (cell.mass < loss + 10) return null;
-  cell.mass -= loss;
-  pellets.push({
-    id: uuidv4(),
-    x: cell.x + Math.cos(dir)*cell.mass*0.6,
-    y: cell.y + Math.sin(dir)*cell.mass*0.6,
-    mass: loss,
-    color: "#85DD65",
-    vx: Math.cos(dir) * power,
-    vy: Math.sin(dir) * power,
-    decay: 0.98
-  });
+function addPlayer(id, players) {
+  players[id] = createPlayer(id);
+}
+function removePlayer(id, players) {
+  delete players[id];
 }
 
-io.on('connection', (socket) => {
-  players[socket.id] = createPlayer(socket.id);
+function handlePlayerInput(id, input, players) {
+  const p = players[id];
+  if (!p) return;
+  p.input = { ...p.input, ...input };
+}
 
-  socket.on('input', (data) => {
-    const p = players[socket.id];
-    if (!p) return;
-    p.input = { ...p.input, ...data };
-  });
-
-  socket.on('disconnect', () => {
-    delete players[socket.id];
-  });
-});
-
-setInterval(() => {
-  // Shot pellets movement
+// ========== Game loop ==========
+function gameTick(players, pellets, io) {
+  // Move pellets with velocity
   for (const pellet of pellets) {
     if ('vx' in pellet) {
       pellet.x += pellet.vx;
@@ -118,20 +79,21 @@ setInterval(() => {
       }
     }
   }
-  pellets = pellets.filter(p => (
+  // Remove out-of-bounds pellets
+  pellets = pellets.filter(p =>
     p.x > 0 && p.x < GAME_WIDTH && p.y > 0 && p.y < GAME_HEIGHT
-  ));
+  );
 
+  // Players
   for (const player of Object.values(players)) {
     for (const cell of player.cells) {
+      // Direction to mouse
       const dx = player.input.mouseX - cell.x;
       const dy = player.input.mouseY - cell.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
       const dir = Math.atan2(dy, dx);
+      let speed = 4 + 50 / Math.max(cell.mass, 10);
 
-      let speed = 4 + 50/Math.max(cell.mass,10);
-
-      // Slither boost
+      // BOOST / "Slither" (mouseDown)
       if (player.input.mouseDown && cell.mass > 20) {
         speed *= 1.65;
         if (Math.random() < 0.22) {
@@ -146,12 +108,13 @@ setInterval(() => {
         }
       }
 
+      // Move cell
       cell.x += Math.cos(dir) * speed;
       cell.y += Math.sin(dir) * speed;
       cell.x = Math.max(Math.min(cell.x, GAME_WIDTH), 0);
       cell.y = Math.max(Math.min(cell.y, GAME_HEIGHT), 0);
 
-      // Agar split
+      // SPLIT (space)
       if (player.input.space && cell.splitTimeout <= 0 && cell.mass >= 30) {
         cell.splitTimeout = 15;
         const newMass = cell.mass / 2;
@@ -169,15 +132,15 @@ setInterval(() => {
       }
       if (cell.splitTimeout > 0) cell.splitTimeout--;
 
-      // Shoot pellet W
+      // SHOOT (W)
       if (player.input.w && cell.mass > 20) {
-        shootPellet(cell, dir);
+        shootPellet(cell, dir, pellets);
         player.input.w = false;
       }
 
-      // Collect pellets
-      for (let pellet of pellets) {
-        if (getDistance(cell.x, cell.y, pellet.x, pellet.y) < Math.sqrt(cell.mass+pellet.mass)*2.4) {
+      // Eat pellets
+      for (let pellet of pellets.slice()) {
+        if (distance(cell.x, cell.y, pellet.x, pellet.y) < Math.sqrt(cell.mass + pellet.mass)*2.4) {
           cell.mass += pellet.mass;
           pellets = pellets.filter(p => p.id !== pellet.id);
         }
@@ -185,9 +148,31 @@ setInterval(() => {
     }
   }
 
+  // Refill if too few pellets
   while (pellets.length < PELLET_COUNT) pellets.push(createPellet());
+}
 
-  io.emit('gameState', {
+function distance(x1,y1,x2,y2){
+  return Math.sqrt((x1-x2)**2 + (y1-y2)**2);
+}
+
+function shootPellet(cell, dir, pellets, power = 7, loss = 7) {
+  if (cell.mass < loss + 10) return;
+  cell.mass -= loss;
+  pellets.push({
+    id: uuidv4(),
+    x: cell.x + Math.cos(dir)*cell.mass*0.6,
+    y: cell.y + Math.sin(dir)*cell.mass*0.6,
+    mass: loss,
+    color: "#85DD65",
+    vx: Math.cos(dir) * power,
+    vy: Math.sin(dir) * power,
+    decay: 0.98
+  });
+}
+
+function getGameState(players, pellets) {
+  return {
     players: Object.values(players).map(player => ({
       id: player.id,
       color: player.color,
@@ -203,9 +188,13 @@ setInterval(() => {
       x: p.x, y: p.y, mass: p.mass, color: p.color
     })),
     bounds: { width: GAME_WIDTH, height: GAME_HEIGHT }
-  });
-}, 1000 / 60);
+  };
+}
 
-server.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
-});
+module.exports = {
+  handlePlayerInput,
+  getGameState,
+  gameTick,
+  addPlayer,
+  removePlayer
+};

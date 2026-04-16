@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html lang="sv">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Agario Test</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #333; }
-        canvas { background: #f0f0f0; display: block; }
-    </style>
+  <meta charset="UTF-8">
+  <title>Multi-Agar/Slither Game</title>
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; }
+    #score { position: absolute; top: 10px; left: 10px; color: #fff; font-family: sans-serif; }
+  </style>
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
-    
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="game.js"></script>
+  <canvas id="game"></canvas>
+  <div id="score"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+  <script src="game.js"></script>
 </body>
 </html>
